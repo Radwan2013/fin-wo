@@ -1,0 +1,841 @@
+-- ==================== WE HATE LARPS v3 — MADIUM EDITION ====================
+-- GUI loads FIRST, hooks apply AFTER (prevents silent crash hiding UI)
+
+local cloneref = cloneref or function(o) return o end
+local clonefunction = clonefunction or function(f) return f end
+
+local Services = {}
+do
+    local gameGetService = clonefunction(game.GetService)
+    Services.Players = cloneref(gameGetService(game, "Players"))
+    Services.RunService = cloneref(gameGetService(game, "RunService"))
+    Services.UserInputService = cloneref(gameGetService(game, "UserInputService"))
+    Services.TweenService = cloneref(gameGetService(game, "TweenService"))
+    Services.HttpService = cloneref(gameGetService(game, "HttpService"))
+    Services.ReplicatedStorage = cloneref(gameGetService(game, "ReplicatedStorage"))
+    Services.CoreGui = cloneref(gameGetService(game, "CoreGui"))
+    Services.StarterGui = cloneref(gameGetService(game, "StarterGui"))
+end
+
+local Players = Services.Players
+local RunService = Services.RunService
+local UserInputService = Services.UserInputService
+local TweenService = Services.TweenService
+local HttpService = Services.HttpService
+local ReplicatedStorage = Services.ReplicatedStorage
+
+local SafeSpawn = task.spawn
+local SafeDelay = task.delay
+local SafeWait = task.wait
+
+local function HumanDelay(minMs, maxMs)
+    local u1 = math.random()
+    local u2 = math.random()
+    local z = math.sqrt(-2 * math.log(u1 + 0.001)) * math.cos(2 * math.pi * u2)
+    local mean = (minMs + maxMs) / 2
+    local stddev = (maxMs - minMs) / 6
+    local delay = math.clamp(mean + z * stddev, minMs, maxMs) / 1000
+    SafeWait(delay)
+end
+
+local function SafeRequire(module)
+    if not module then return nil end
+    local success, result = pcall(function()
+        return require(module)
+    end)
+    if success then return result end
+    return nil
+end
+
+-- ==================== CLEANUP PREVIOUS INSTANCE ====================
+
+if getgenv().WeHateLarpsLoaded then
+    pcall(function() getgenv().WeHateLarpsLoaded:Disconnect() end)
+    if getgenv().WeHateLarpsGui then
+        pcall(function() getgenv().WeHateLarpsGui:Destroy() end)
+    end
+    if getgenv().WeHateLarpsFOV then
+        pcall(function() getgenv().WeHateLarpsFOV:Remove() end)
+    end
+end
+
+if getgenv().WeHateLarpsESPDrawings then
+    for _, drawings in pairs(getgenv().WeHateLarpsESPDrawings) do
+        for _, d in pairs(drawings) do
+            if d and d.Remove then pcall(function() d:Remove() end) end
+        end
+    end
+    getgenv().WeHateLarpsESPDrawings = nil
+end
+
+if getgenv().RivalsWeaponMods then
+    pcall(function()
+        local GunModule = getgenv().RivalsWeaponMods.GunModule
+        if GunModule then
+            if getgenv().RivalsWeaponMods.OriginalStartShooting then GunModule.StartShooting = getgenv().RivalsWeaponMods.OriginalStartShooting end
+            if getgenv().RivalsWeaponMods.OriginalStartReloading then GunModule.StartReloading = getgenv().RivalsWeaponMods.OriginalStartReloading end
+            if getgenv().RivalsWeaponMods.OriginalRecoil then GunModule._Recoil = getgenv().RivalsWeaponMods.OriginalRecoil end
+            if getgenv().RivalsWeaponMods.OriginalStartAiming then GunModule.StartAiming = getgenv().RivalsWeaponMods.OriginalStartAiming end
+            if getgenv().RivalsWeaponMods.OriginalGetAimSpeed then GunModule.GetAimSpeed = getgenv().RivalsWeaponMods.OriginalGetAimSpeed end
+            if getgenv().RivalsWeaponMods.OriginalEquip then GunModule.Equip = getgenv().RivalsWeaponMods.OriginalEquip end
+            if getgenv().RivalsWeaponMods.OriginalLocalTracers then GunModule._LocalTracers = getgenv().RivalsWeaponMods.OriginalLocalTracers end
+            if getgenv().RivalsWeaponMods.OriginalProjectileEffect then GunModule._ProjectileEffect = getgenv().RivalsWeaponMods.OriginalProjectileEffect end
+        end
+        local GameplayUtility = getgenv().RivalsWeaponMods.GameplayUtility
+        if GameplayUtility and getgenv().RivalsWeaponMods.OriginalGetSpread then GameplayUtility.GetSpread = getgenv().RivalsWeaponMods.OriginalGetSpread end
+    end)
+    getgenv().RivalsWeaponMods = nil
+end
+
+if getgenv().WeHateLarpsAntiAimConn then pcall(function() getgenv().WeHateLarpsAntiAimConn:Disconnect() end) getgenv().WeHateLarpsAntiAimConn = nil end
+if getgenv().WeHateLarpsTPConn then pcall(function() getgenv().WeHateLarpsTPConn:Disconnect() end) getgenv().WeHateLarpsTPConn = nil end
+if getgenv().WeHateLarpsFlyConn then pcall(function() getgenv().WeHateLarpsFlyConn:Disconnect() end) getgenv().WeHateLarpsFlyConn = nil end
+if getgenv().WeHateLarpsFlyBV then pcall(function() getgenv().WeHateLarpsFlyBV:Destroy() end) getgenv().WeHateLarpsFlyBV = nil end
+if getgenv().WHLACBypass then
+    pcall(function() for _, conn in pairs(getgenv().WHLACBypass.Connections or {}) do conn:Disconnect() end end)
+    getgenv().WHLACBypass = nil
+end
+
+-- ==================== CORE VARIABLES ====================
+
+local LocalPlayer = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
+
+local SaveFileName = "WHL_S_" .. tostring(game.PlaceId) .. ".json"
+
+local function DeepCopy(t)
+    local copy = {}
+    for k, v in pairs(t) do
+        if type(v) == "table" then copy[k] = DeepCopy(v) else copy[k] = v end
+    end
+    return copy
+end
+
+local function SerializeConfig(cfg)
+    local data = {}
+    for k, v in pairs(cfg) do
+        if typeof(v) == "EnumItem" then
+            data[k] = {_enumType = "EnumItem", _enumPath = tostring(v)}
+        else
+            data[k] = v
+        end
+    end
+    return data
+end
+
+local function ResolveEnumFromPath(path)
+    local parts = string.split(path, ".")
+    if #parts == 3 and parts[1] == "Enum" then
+        local success, result = pcall(function() return Enum[parts[2]][parts[3]] end)
+        if success then return result end
+    end
+    return nil
+end
+
+local function DeserializeConfig(data, defaults)
+    local cfg = DeepCopy(defaults)
+    for k, v in pairs(data) do
+        if type(v) == "table" and v._enumType == "EnumItem" then
+            local resolved = ResolveEnumFromPath(v._enumPath)
+            if resolved then cfg[k] = resolved end
+        elseif defaults[k] ~= nil then
+            cfg[k] = v
+        end
+    end
+    return cfg
+end
+
+local function SaveConfig(cfg)
+    pcall(function()
+        local serialized = SerializeConfig(cfg)
+        local json = HttpService:JSONEncode(serialized)
+        writefile(SaveFileName, json)
+    end)
+end
+
+local function LoadConfig(defaults)
+    local success, result = pcall(function()
+        if isfile(SaveFileName) then
+            local json = readfile(SaveFileName)
+            local data = HttpService:JSONDecode(json)
+            return DeserializeConfig(data, defaults)
+        end
+        return nil
+    end)
+    if success and result then return result end
+    return DeepCopy(defaults)
+end
+
+local DefaultConfig = {
+    AimbotEnabled = false,
+    Smoothness = 8,
+    Sensitivity = 1,
+    FOVRadius = 180,
+    FOVVisible = true,
+    FOVFilled = false,
+    TargetPart = "Head",
+    AimMode = "Hold",
+    TeamCheck = false,
+    WallCheck = false,
+    AliveCheck = true,
+    Prediction = false,
+    PredictionAmount = 0.12,
+    StickyAim = false,
+    SuperStickyAim = false,
+    SuperStickyFOVMultiplier = 5,
+    TriggerBot = false,
+    TriggerDelay = 0.05,
+    TriggerBotWallCheck = false,
+    HealthThreshold = 0,
+    ToggleKey = Enum.KeyCode.RightShift,
+    AimKey = Enum.UserInputType.MouseButton2,
+    AimbotToggleKey = Enum.KeyCode.H,
+    SilentAimEnabled = false,
+    SilentAimHitChance = 100,
+    SilentAimVisibleCheck = false,
+    SilentAimAliveCheck = true,
+    RapidFire = false,
+    RapidFireSpeed = 0.05,
+    InstantReload = false,
+    NoRecoil = false,
+    RecoilReduction = 100,
+    NoSpread = false,
+    NoWeaponBob = false,
+    InstantADS = false,
+    InstantEquip = false,
+    NoEquipAnimation = false,
+    InfiniteAmmo = false,
+    InstantBulletTravel = false,
+    ProjectileSpeed = false,
+    ProjectileSpeedMultiplier = 5,
+    AntiAimEnabled = false,
+    AntiAimMode = "Spin",
+    AntiAimPitch = "Down",
+    SpinSpeed = 15,
+    DesyncEnabled = false,
+    DesyncMode = "Opposite",
+    FakeLagEnabled = false,
+    FakeLagAmount = 3,
+    AntiBacktrack = false,
+    AntiResolver = false,
+    AntiResolverMode = "Jitter",
+    FakeAngleOffset = 180,
+    JitterRange = 90,
+    ESPEnabled = false,
+    ESPBoxes = true,
+    ESPHealth = true,
+    ESPDistance = true,
+    ESPGuns = true,
+    ESPNames = true,
+    ESPTeamCheck = false,
+    ESPMaxDistance = 2000,
+    ESPBoxColor = {255, 255, 255},
+    ESPTextSize = 13,
+    TPEnabled = false,
+    TPKey = Enum.KeyCode.T,
+    TPBehind = false,
+    TPOffset = 0,
+    SkinChangerEnabled = false,
+    UnlockAllSkins = false,
+    FlyEnabled = false,
+    FlySpeed = 50,
+    FlyKey = Enum.KeyCode.F,
+    ACBypassEnabled = true,
+    HumanizeAim = true,
+    ServerSafeMode = true,
+}
+
+local Config = LoadConfig(DefaultConfig)
+
+local AutoSaveQueued = false
+local function QueueAutoSave()
+    if AutoSaveQueued then return end
+    AutoSaveQueued = true
+    SafeDelay(1, function() AutoSaveQueued = false; SaveConfig(Config) end)
+end
+
+local Aiming = false
+local CurrentTarget = nil
+local MenuOpen = true
+local ActiveTab = "Combat"
+local LastTriggerTime = 0
+local AntiAimAngle = 0
+local FakeLagCounter = 0
+local JitterState = false
+local DesyncOffset = 0
+local Flying = false
+local FlyBodyVelocity = nil
+local FlyBodyGyro = nil
+local SilentAimHooked = false
+local OldRaycast = nil
+local AimStartTime = 0
+local LastTargetPlayer = nil
+
+local ESPDrawings = {}
+getgenv().WeHateLarpsESPDrawings = ESPDrawings
+
+local ServerLimits = {
+    MinFireInterval = 0.04,
+    MaxDamagePerShot = 150,
+    MaxTeleportDistance = 50,
+    MaxPositionDelta = 100,
+}
+
+local HumanAim = {
+    Overshoot = 0.08,
+    MicroJitter = 0.3,
+    AccelerationCurve = true,
+    CurrentSmoothing = 1,
+}
+
+-- ==================== GUI CREATION (FIRST — BEFORE ANY HOOKS) ====================
+
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "WHL_" .. math.random(100000, 999999)
+ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+ScreenGui.ResetOnSpawn = false
+ScreenGui.DisplayOrder = 999
+
+-- Madium parenting: gethui > CoreGui > PlayerGui
+do
+    local parented = false
+    if not parented then
+        pcall(function()
+            if gethui then
+                ScreenGui.Parent = gethui()
+                if ScreenGui.Parent then parented = true end
+            end
+        end)
+    end
+    if not parented then
+        pcall(function()
+            ScreenGui.Parent = Services.CoreGui
+            if ScreenGui.Parent then parented = true end
+        end)
+    end
+    if not parented then
+        pcall(function()
+            ScreenGui.Parent = game:GetService("CoreGui")
+            if ScreenGui.Parent then parented = true end
+        end)
+    end
+    if not parented then
+        pcall(function()
+            ScreenGui.Parent = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+            if ScreenGui.Parent then parented = true end
+        end)
+    end
+end
+
+getgenv().WeHateLarpsGui = ScreenGui
+
+local function Tween(obj, props, dur)
+    TweenService:Create(obj, TweenInfo.new(dur or 0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), props):Play()
+end
+
+local function Create(className, properties)
+    local inst = Instance.new(className)
+    for k, v in pairs(properties) do
+        if k ~= "Parent" then inst[k] = v end
+    end
+    if properties.Parent then inst.Parent = properties.Parent end
+    return inst
+end
+
+local function AddCorner(parent, radius)
+    return Create("UICorner", { CornerRadius = UDim.new(0, radius or 8), Parent = parent })
+end
+
+local function AddStroke(parent, color, thickness)
+    return Create("UIStroke", { Color = color or Color3.fromRGB(45, 45, 45), Thickness = thickness or 1, Parent = parent })
+end
+
+local function AddPadding(parent, t, b, l, r)
+    return Create("UIPadding", { PaddingTop = UDim.new(0, t or 0), PaddingBottom = UDim.new(0, b or 0), PaddingLeft = UDim.new(0, l or 0), PaddingRight = UDim.new(0, r or 0), Parent = parent })
+end
+
+local MainFrame = Create("Frame", {
+    Name = "M", Size = UDim2.new(0, 560, 0, 520), Position = UDim2.new(0.5, -280, 0.5, -260),
+    BackgroundColor3 = Color3.fromRGB(15, 15, 15), BorderSizePixel = 0, Parent = ScreenGui
+})
+AddCorner(MainFrame, 10)
+AddStroke(MainFrame, Color3.fromRGB(40, 40, 40), 1)
+
+local TopBar = Create("Frame", { Name = "TB", Size = UDim2.new(1, 0, 0, 42), BackgroundColor3 = Color3.fromRGB(20, 20, 20), BorderSizePixel = 0, Parent = MainFrame })
+AddCorner(TopBar, 10)
+Create("Frame", { Size = UDim2.new(1, 0, 0, 12), Position = UDim2.new(0, 0, 1, -12), BackgroundColor3 = Color3.fromRGB(20, 20, 20), BorderSizePixel = 0, Parent = TopBar })
+
+local TitleLabel = Create("TextLabel", {
+    Size = UDim2.new(1, -20, 1, 0), Position = UDim2.new(0, 16, 0, 0), BackgroundTransparency = 1,
+    Text = "we hate larps v3", TextColor3 = Color3.fromRGB(255, 255, 255), TextSize = 15,
+    Font = Enum.Font.GothamBold, TextXAlignment = Enum.TextXAlignment.Left, Parent = TopBar
+})
+
+local StatusDot = Create("Frame", {
+    Size = UDim2.new(0, 8, 0, 8), Position = UDim2.new(1, -24, 0.5, -4),
+    BackgroundColor3 = Config.AimbotEnabled and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(80, 80, 80),
+    BorderSizePixel = 0, Parent = TopBar
+})
+AddCorner(StatusDot, 4)
+
+Create("Frame", { Size = UDim2.new(1, -24, 0, 1), Position = UDim2.new(0, 12, 0, 42), BackgroundColor3 = Color3.fromRGB(35, 35, 35), BorderSizePixel = 0, Parent = MainFrame })
+
+local TabHolder = Create("Frame", { Name = "TH", Size = UDim2.new(1, -24, 0, 32), Position = UDim2.new(0, 12, 0, 50), BackgroundTransparency = 1, BorderSizePixel = 0, Parent = MainFrame })
+Create("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 4), Parent = TabHolder })
+
+local ContentHolder = Create("ScrollingFrame", {
+    Name = "C", Size = UDim2.new(1, -24, 1, -96), Position = UDim2.new(0, 12, 0, 90),
+    BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 3,
+    ScrollBarImageColor3 = Color3.fromRGB(60, 60, 60), CanvasSize = UDim2.new(0, 0, 0, 0),
+    AutomaticCanvasSize = Enum.AutomaticSize.Y, ScrollingDirection = Enum.ScrollingDirection.Y,
+    ElasticBehavior = Enum.ElasticBehavior.Always, Parent = MainFrame
+})
+Create("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder, Parent = ContentHolder })
+AddPadding(ContentHolder, 2, 8, 0, 0)
+
+-- Dragging
+local Dragging, DragInput, DragStart, StartPosition
+TopBar.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        Dragging = true; DragStart = input.Position; StartPosition = MainFrame.Position
+        input.Changed:Connect(function() if input.UserInputState == Enum.UserInputState.End then Dragging = false end end)
+    end
+end)
+TopBar.InputChanged:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then DragInput = input end
+end)
+UserInputService.InputChanged:Connect(function(input)
+    if input == DragInput and Dragging then
+        local delta = input.Position - DragStart
+        Tween(MainFrame, {Position = UDim2.new(StartPosition.X.Scale, StartPosition.X.Offset + delta.X, StartPosition.Y.Scale, StartPosition.Y.Offset + delta.Y)}, 0.06)
+    end
+end)
+
+local KeyNames = {
+    [Enum.KeyCode.RightShift] = "RShift", [Enum.KeyCode.LeftShift] = "LShift",
+    [Enum.KeyCode.RightControl] = "RCtrl", [Enum.KeyCode.LeftControl] = "LCtrl",
+    [Enum.KeyCode.LeftAlt] = "LAlt", [Enum.KeyCode.RightAlt] = "RAlt",
+    [Enum.KeyCode.Tab] = "Tab", [Enum.KeyCode.CapsLock] = "CapsLock", [Enum.KeyCode.Backquote] = "`",
+}
+local InputTypeNames = {
+    [Enum.UserInputType.MouseButton1] = "Mouse 1", [Enum.UserInputType.MouseButton2] = "Mouse 2",
+    [Enum.UserInputType.MouseButton3] = "Mouse 3",
+}
+local function GetKeyDisplayName(input)
+    if typeof(input) == "EnumItem" then
+        if input.EnumType == Enum.KeyCode then return KeyNames[input] or input.Name
+        elseif input.EnumType == Enum.UserInputType then return InputTypeNames[input] or input.Name end
+    end
+    return tostring(input)
+end
+
+local TabButtons = {}
+local TabContents = {}
+
+local function CreateToggle(parent, name, default, callback, layoutOrder)
+    local holder = Create("Frame", { Name = name, Size = UDim2.new(1, 0, 0, 36), BackgroundColor3 = Color3.fromRGB(22, 22, 22), BorderSizePixel = 0, LayoutOrder = layoutOrder or 0, Parent = parent })
+    AddCorner(holder, 7)
+    Create("TextLabel", { Size = UDim2.new(1, -70, 1, 0), Position = UDim2.new(0, 14, 0, 0), BackgroundTransparency = 1, Text = name, TextColor3 = Color3.fromRGB(190, 190, 190), TextSize = 13, Font = Enum.Font.GothamMedium, TextXAlignment = Enum.TextXAlignment.Left, Parent = holder })
+    local toggleBg = Create("Frame", { Size = UDim2.new(0, 40, 0, 20), Position = UDim2.new(1, -54, 0.5, -10), BackgroundColor3 = default and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(45, 45, 45), BorderSizePixel = 0, Parent = holder })
+    AddCorner(toggleBg, 10)
+    local knob = Create("Frame", { Size = UDim2.new(0, 16, 0, 16), Position = default and UDim2.new(1, -18, 0.5, -8) or UDim2.new(0, 2, 0.5, -8), BackgroundColor3 = default and Color3.fromRGB(15, 15, 15) or Color3.fromRGB(100, 100, 100), BorderSizePixel = 0, Parent = toggleBg })
+    AddCorner(knob, 8)
+    local state = default
+    local btn = Create("TextButton", { Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, Text = "", Parent = holder })
+    btn.MouseButton1Click:Connect(function()
+        state = not state
+        Tween(toggleBg, {BackgroundColor3 = state and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(45, 45, 45)}, 0.25)
+        Tween(knob, { Position = state and UDim2.new(1, -18, 0.5, -8) or UDim2.new(0, 2, 0.5, -8), BackgroundColor3 = state and Color3.fromRGB(15, 15, 15) or Color3.fromRGB(100, 100, 100) }, 0.25)
+        callback(state); QueueAutoSave()
+    end)
+    return {
+        Set = function(val) state = val; Tween(toggleBg, {BackgroundColor3 = state and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(45, 45, 45)}, 0.25); Tween(knob, { Position = state and UDim2.new(1, -18, 0.5, -8) or UDim2.new(0, 2, 0.5, -8), BackgroundColor3 = state and Color3.fromRGB(15, 15, 15) or Color3.fromRGB(100, 100, 100) }, 0.25); callback(state) end,
+        Get = function() return state end
+    }
+end
+
+local function CreateSlider(parent, name, min, max, default, step, callback, layoutOrder)
+    local holder = Create("Frame", { Name = name, Size = UDim2.new(1, 0, 0, 50), BackgroundColor3 = Color3.fromRGB(22, 22, 22), BorderSizePixel = 0, LayoutOrder = layoutOrder or 0, Parent = parent })
+    AddCorner(holder, 7)
+    local valueDisplay = Create("TextLabel", { Size = UDim2.new(0, 60, 0, 20), Position = UDim2.new(1, -74, 0, 4), BackgroundTransparency = 1, Text = tostring(default), TextColor3 = Color3.fromRGB(140, 140, 140), TextSize = 12, Font = Enum.Font.GothamMedium, TextXAlignment = Enum.TextXAlignment.Right, Parent = holder })
+    Create("TextLabel", { Size = UDim2.new(1, -80, 0, 20), Position = UDim2.new(0, 14, 0, 4), BackgroundTransparency = 1, Text = name, TextColor3 = Color3.fromRGB(190, 190, 190), TextSize = 13, Font = Enum.Font.GothamMedium, TextXAlignment = Enum.TextXAlignment.Left, Parent = holder })
+    local sliderBg = Create("Frame", { Size = UDim2.new(1, -28, 0, 6), Position = UDim2.new(0, 14, 0, 32), BackgroundColor3 = Color3.fromRGB(35, 35, 35), BorderSizePixel = 0, Parent = holder })
+    AddCorner(sliderBg, 3)
+    local pct = math.clamp((default - min) / (max - min), 0, 1)
+    local sliderFill = Create("Frame", { Size = UDim2.new(pct, 0, 1, 0), BackgroundColor3 = Color3.fromRGB(255, 255, 255), BorderSizePixel = 0, Parent = sliderBg })
+    AddCorner(sliderFill, 3)
+    local sknob = Create("Frame", { Size = UDim2.new(0, 12, 0, 12), Position = UDim2.new(pct, -6, 0.5, -6), BackgroundColor3 = Color3.fromRGB(255, 255, 255), BorderSizePixel = 0, ZIndex = 3, Parent = sliderBg })
+    AddCorner(sknob, 6)
+    local dragging = false
+    local currentVal = default
+    local interactBtn = Create("TextButton", { Size = UDim2.new(1, 0, 0, 20), Position = UDim2.new(0, 0, 0, 26), BackgroundTransparency = 1, Text = "", Parent = holder })
+    local function Update(input)
+        local relX = input.Position.X - sliderBg.AbsolutePosition.X
+        local pctNew = math.clamp(relX / sliderBg.AbsoluteSize.X, 0, 1)
+        local raw = min + pctNew * (max - min)
+        local snapped = math.clamp(math.floor(raw / step + 0.5) * step, min, max)
+        currentVal = snapped
+        local displayPct = (snapped - min) / (max - min)
+        sliderFill.Size = UDim2.new(displayPct, 0, 1, 0)
+        sknob.Position = UDim2.new(displayPct, -6, 0.5, -6)
+        valueDisplay.Text = step < 1 and string.format("%.2f", snapped) or tostring(math.floor(snapped))
+        callback(snapped)
+    end
+    interactBtn.InputBegan:Connect(function(input) if input.UserInputType == Enum.UserInputType.MouseButton1 then dragging = true; Update(input) end end)
+    interactBtn.InputEnded:Connect(function(input) if input.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false; QueueAutoSave() end end)
+    sliderBg.InputBegan:Connect(function(input) if input.UserInputType == Enum.UserInputType.MouseButton1 then dragging = true; Update(input) end end)
+    UserInputService.InputChanged:Connect(function(input) if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then Update(input) end end)
+    UserInputService.InputEnded:Connect(function(input) if input.UserInputType == Enum.UserInputType.MouseButton1 and dragging then dragging = false; QueueAutoSave() end end)
+    return { Set = function(val) currentVal = val; local dp = (val - min) / (max - min); sliderFill.Size = UDim2.new(dp, 0, 1, 0); sknob.Position = UDim2.new(dp, -6, 0.5, -6); valueDisplay.Text = step < 1 and string.format("%.2f", val) or tostring(math.floor(val)); callback(val) end, Get = function() return currentVal end }
+end
+
+local function CreateDropdown(parent, name, options, default, callback, layoutOrder)
+    local expanded = false
+    local selectedValue = default
+    local holder = Create("Frame", { Name = name, Size = UDim2.new(1, 0, 0, 36), BackgroundColor3 = Color3.fromRGB(22, 22, 22), BorderSizePixel = 0, ClipsDescendants = true, LayoutOrder = layoutOrder or 0, Parent = parent })
+    AddCorner(holder, 7)
+    Create("TextLabel", { Size = UDim2.new(0.5, -10, 0, 36), Position = UDim2.new(0, 14, 0, 0), BackgroundTransparency = 1, Text = name, TextColor3 = Color3.fromRGB(190, 190, 190), TextSize = 13, Font = Enum.Font.GothamMedium, TextXAlignment = Enum.TextXAlignment.Left, Parent = holder })
+    local selectedBtn = Create("TextButton", { Size = UDim2.new(0.45, -10, 0, 28), Position = UDim2.new(0.55, 0, 0, 4), BackgroundColor3 = Color3.fromRGB(30, 30, 30), BorderSizePixel = 0, Text = tostring(default), TextColor3 = Color3.fromRGB(160, 160, 160), TextSize = 12, Font = Enum.Font.GothamMedium, AutoButtonColor = false, Parent = holder })
+    AddCorner(selectedBtn, 6)
+    local arrow = Create("TextLabel", { Size = UDim2.new(0, 20, 0, 28), Position = UDim2.new(1, -24, 0, 4), BackgroundTransparency = 1, Text = "v", TextColor3 = Color3.fromRGB(100, 100, 100), TextSize = 11, Font = Enum.Font.GothamBold, Parent = holder })
+    local optionContainer = Create("Frame", { Size = UDim2.new(0.45, -10, 0, #options * 28), Position = UDim2.new(0.55, 0, 0, 36), BackgroundTransparency = 1, BorderSizePixel = 0, Parent = holder })
+    Create("UIListLayout", { Padding = UDim.new(0, 2), Parent = optionContainer })
+    for _, opt in ipairs(options) do
+        local optBtn = Create("TextButton", { Size = UDim2.new(1, 0, 0, 26), BackgroundColor3 = Color3.fromRGB(28, 28, 28), BorderSizePixel = 0, Text = opt, TextColor3 = Color3.fromRGB(150, 150, 150), TextSize = 12, Font = Enum.Font.GothamMedium, AutoButtonColor = false, Parent = optionContainer })
+        AddCorner(optBtn, 5)
+        optBtn.MouseEnter:Connect(function() Tween(optBtn, {BackgroundColor3 = Color3.fromRGB(40, 40, 40)}, 0.15) end)
+        optBtn.MouseLeave:Connect(function() Tween(optBtn, {BackgroundColor3 = Color3.fromRGB(28, 28, 28)}, 0.15) end)
+        optBtn.MouseButton1Click:Connect(function() selectedValue = opt; selectedBtn.Text = opt; expanded = false; Tween(holder, {Size = UDim2.new(1, 0, 0, 36)}, 0.2); arrow.Text = "v"; callback(opt); QueueAutoSave() end)
+    end
+    selectedBtn.MouseButton1Click:Connect(function() expanded = not expanded; Tween(holder, {Size = expanded and UDim2.new(1, 0, 0, 36 + 4 + #options * 28) or UDim2.new(1, 0, 0, 36)}, 0.2); arrow.Text = expanded and "^" or "v" end)
+    return { Set = function(val) selectedValue = val; selectedBtn.Text = val; callback(val) end, Get = function() return selectedValue end }
+end
+
+local function CreateSectionLabel(parent, text, layoutOrder)
+    local lbl = Create("TextLabel", { Size = UDim2.new(1, 0, 0, 22), BackgroundTransparency = 1, Text = text, TextColor3 = Color3.fromRGB(90, 90, 90), TextSize = 11, Font = Enum.Font.GothamBold, TextXAlignment = Enum.TextXAlignment.Left, LayoutOrder = layoutOrder or 0, Parent = parent })
+    AddPadding(lbl, 0, 0, 6, 0)
+    return lbl
+end
+
+local function CreateKeyPicker(parent, name, currentKey, callback, layoutOrder)
+    local listening = false
+    local holder = Create("Frame", { Name = name, Size = UDim2.new(1, 0, 0, 36), BackgroundColor3 = Color3.fromRGB(22, 22, 22), BorderSizePixel = 0, LayoutOrder = layoutOrder or 0, Parent = parent })
+    AddCorner(holder, 7)
+    Create("TextLabel", { Size = UDim2.new(0.55, -10, 1, 0), Position = UDim2.new(0, 14, 0, 0), BackgroundTransparency = 1, Text = name, TextColor3 = Color3.fromRGB(190, 190, 190), TextSize = 13, Font = Enum.Font.GothamMedium, TextXAlignment = Enum.TextXAlignment.Left, Parent = holder })
+    local keyBtn = Create("TextButton", { Size = UDim2.new(0.4, -10, 0, 26), Position = UDim2.new(0.6, 0, 0.5, -13), BackgroundColor3 = Color3.fromRGB(30, 30, 30), BorderSizePixel = 0, Text = GetKeyDisplayName(currentKey), TextColor3 = Color3.fromRGB(160, 160, 160), TextSize = 12, Font = Enum.Font.GothamMedium, AutoButtonColor = false, Parent = holder })
+    AddCorner(keyBtn, 6)
+    local conn1
+    local function StopListening() listening = false; Tween(keyBtn, {BackgroundColor3 = Color3.fromRGB(30, 30, 30)}, 0.2); if conn1 then conn1:Disconnect(); conn1 = nil end end
+    local function StartListening()
+        listening = true; keyBtn.Text = "..."; Tween(keyBtn, {BackgroundColor3 = Color3.fromRGB(50, 50, 50)}, 0.2)
+        conn1 = UserInputService.InputBegan:Connect(function(input)
+            if not listening then return end
+            if input.UserInputType == Enum.UserInputType.Keyboard then
+                if input.KeyCode == Enum.KeyCode.Escape then keyBtn.Text = GetKeyDisplayName(currentKey); StopListening(); return end
+                currentKey = input.KeyCode; keyBtn.Text = GetKeyDisplayName(currentKey); callback(currentKey); QueueAutoSave(); StopListening(); return
+            end
+            if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.MouseButton2 or input.UserInputType == Enum.UserInputType.MouseButton3 then
+                currentKey = input.UserInputType; keyBtn.Text = GetKeyDisplayName(currentKey); callback(currentKey); QueueAutoSave(); StopListening(); return
+            end
+        end)
+    end
+    keyBtn.MouseButton1Click:Connect(function() if listening then StopListening(); keyBtn.Text = GetKeyDisplayName(currentKey) else StartListening() end end)
+    return { Set = function(val) currentKey = val; keyBtn.Text = GetKeyDisplayName(val); callback(val) end, Get = function() return currentKey end }
+end
+
+local function CreateButton(parent, name, color, textColor, callback, layoutOrder)
+    local btn = Create("TextButton", { Name = name, Size = UDim2.new(1, 0, 0, 36), BackgroundColor3 = color, BorderSizePixel = 0, Text = name, TextColor3 = textColor or Color3.fromRGB(180, 180, 180), TextSize = 13, Font = Enum.Font.GothamBold, AutoButtonColor = false, LayoutOrder = layoutOrder or 0, Parent = parent })
+    AddCorner(btn, 7)
+    local hc = Color3.fromRGB(math.min(255, color.R*255+15), math.min(255, color.G*255+15), math.min(255, color.B*255+15))
+    btn.MouseEnter:Connect(function() Tween(btn, {BackgroundColor3 = hc}, 0.15) end)
+    btn.MouseLeave:Connect(function() Tween(btn, {BackgroundColor3 = color}, 0.15) end)
+    btn.MouseButton1Click:Connect(callback)
+    return btn
+end
+
+local function CreateInfoLabel(parent, text, textColor, layoutOrder)
+    local holder = Create("Frame", { Size = UDim2.new(1, 0, 0, 50), BackgroundColor3 = Color3.fromRGB(22, 22, 22), BorderSizePixel = 0, LayoutOrder = layoutOrder or 0, Parent = parent })
+    AddCorner(holder, 7)
+    Create("TextLabel", { Size = UDim2.new(1, -28, 1, 0), Position = UDim2.new(0, 14, 0, 0), BackgroundTransparency = 1, Text = text, TextColor3 = textColor or Color3.fromRGB(150, 150, 150), TextSize = 12, Font = Enum.Font.GothamMedium, TextXAlignment = Enum.TextXAlignment.Left, TextWrapped = true, Parent = holder })
+    return holder
+end
+
+-- Tab system
+local function SwitchTab(tabName)
+    ActiveTab = tabName
+    for name, frame in pairs(TabContents) do frame.Visible = (name == tabName) end
+    for name, btn in pairs(TabButtons) do
+        if name == tabName then Tween(btn, {BackgroundColor3 = Color3.fromRGB(255, 255, 255)}, 0.2); btn.TextColor3 = Color3.fromRGB(0, 0, 0)
+        else Tween(btn, {BackgroundColor3 = Color3.fromRGB(28, 28, 28)}, 0.2); btn.TextColor3 = Color3.fromRGB(130, 130, 130) end
+    end
+    ContentHolder.CanvasPosition = Vector2.new(0, 0)
+end
+
+local Tabs = {"Combat", "Target", "Gun Mods", "HvH", "Visuals", "Misc"}
+for i, tabName in ipairs(Tabs) do
+    local isActive = (tabName == ActiveTab)
+    local tabBtn = Create("TextButton", { Name = tabName, Size = UDim2.new(0, 82, 0, 28), BackgroundColor3 = isActive and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(28, 28, 28), BorderSizePixel = 0, Text = tabName, TextColor3 = isActive and Color3.fromRGB(0, 0, 0) or Color3.fromRGB(130, 130, 130), TextSize = 11, Font = Enum.Font.GothamBold, AutoButtonColor = false, LayoutOrder = i, Parent = TabHolder })
+    AddCorner(tabBtn, 7)
+    tabBtn.MouseButton1Click:Connect(function() SwitchTab(tabName) end)
+    TabButtons[tabName] = tabBtn
+    local contentFrame = Create("Frame", { Name = tabName, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1, Visible = isActive, Parent = ContentHolder })
+    Create("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder, Parent = contentFrame })
+    TabContents[tabName] = contentFrame
+end
+
+local CT, TT, GMT, HT, VT, MT = TabContents["Combat"], TabContents["Target"], TabContents["Gun Mods"], TabContents["HvH"], TabContents["Visuals"], TabContents["Misc"]
+
+-- ==================== COMBAT TAB ====================
+CreateSectionLabel(CT, "AIMBOT", 1)
+local AimbotToggleUI = CreateToggle(CT, "Aimbot", Config.AimbotEnabled, function(v) Config.AimbotEnabled = v; Tween(StatusDot, {BackgroundColor3 = v and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(80, 80, 80)}, 0.3) end, 2)
+CreateToggle(CT, "Sticky Aim", Config.StickyAim, function(v) Config.StickyAim = v end, 3)
+CreateToggle(CT, "Super Sticky Aim", Config.SuperStickyAim, function(v) Config.SuperStickyAim = v end, 4)
+CreateSlider(CT, "Super Sticky FOV Mult", 1, 20, Config.SuperStickyFOVMultiplier, 1, function(v) Config.SuperStickyFOVMultiplier = v end, 5)
+CreateToggle(CT, "Prediction", Config.Prediction, function(v) Config.Prediction = v end, 6)
+CreateSectionLabel(CT, "TUNING", 7)
+CreateSlider(CT, "Smoothness", 0, 50, Config.Smoothness, 1, function(v) Config.Smoothness = v end, 8)
+CreateSlider(CT, "Sensitivity", 0, 50, Config.Sensitivity, 0.1, function(v) Config.Sensitivity = v end, 9)
+CreateSlider(CT, "Prediction Amount", 0.01, 1, Config.PredictionAmount, 0.01, function(v) Config.PredictionAmount = v end, 10)
+CreateDropdown(CT, "Aim Mode", {"Hold", "Toggle"}, Config.AimMode, function(v) Config.AimMode = v end, 11)
+CreateSectionLabel(CT, "TARGET PART", 12)
+CreateDropdown(CT, "Target Part", {"Head", "HumanoidRootPart", "UpperTorso", "LowerTorso"}, Config.TargetPart, function(v) Config.TargetPart = v end, 13)
+CreateSectionLabel(CT, "FOV", 14)
+CreateToggle(CT, "FOV Circle", Config.FOVVisible, function(v) Config.FOVVisible = v end, 15)
+CreateToggle(CT, "FOV Filled", Config.FOVFilled, function(v) Config.FOVFilled = v end, 16)
+CreateSlider(CT, "FOV Radius", 30, 1200, Config.FOVRadius, 5, function(v) Config.FOVRadius = v end, 17)
+CreateSectionLabel(CT, "SILENT AIM", 18)
+CreateToggle(CT, "Silent Aim", Config.SilentAimEnabled, function(v) Config.SilentAimEnabled = v; if v then pcall(HookSilentAim) end end, 19)
+CreateSlider(CT, "Hit Chance", 1, 100, Config.SilentAimHitChance, 1, function(v) Config.SilentAimHitChance = v end, 20)
+CreateToggle(CT, "Visible Check", Config.SilentAimVisibleCheck, function(v) Config.SilentAimVisibleCheck = v end, 21)
+CreateToggle(CT, "Alive Check", Config.SilentAimAliveCheck, function(v) Config.SilentAimAliveCheck = v end, 22)
+CreateSectionLabel(CT, "TRIGGERBOT", 23)
+CreateToggle(CT, "Triggerbot", Config.TriggerBot, function(v) Config.TriggerBot = v end, 24)
+CreateSlider(CT, "Trigger Delay", 0, 0.5, Config.TriggerDelay, 0.01, function(v) Config.TriggerDelay = v end, 25)
+CreateToggle(CT, "Triggerbot Wall Check", Config.TriggerBotWallCheck, function(v) Config.TriggerBotWallCheck = v end, 26)
+CreateSectionLabel(CT, "TELEPORT", 27)
+CreateToggle(CT, "TP to Enemy", Config.TPEnabled, function(v) Config.TPEnabled = v end, 28)
+CreateKeyPicker(CT, "TP Key", Config.TPKey, function(v) Config.TPKey = v end, 29)
+CreateToggle(CT, "TP Behind", Config.TPBehind, function(v) Config.TPBehind = v end, 30)
+CreateSlider(CT, "TP Offset", 0, 20, Config.TPOffset, 1, function(v) Config.TPOffset = v end, 31)
+
+-- ==================== TARGET TAB ====================
+CreateSectionLabel(TT, "FILTERS", 1)
+CreateToggle(TT, "Wall Check", Config.WallCheck, function(v) Config.WallCheck = v end, 2)
+CreateToggle(TT, "Team Check", Config.TeamCheck, function(v) Config.TeamCheck = v end, 3)
+CreateToggle(TT, "Alive Check", Config.AliveCheck, function(v) Config.AliveCheck = v end, 4)
+CreateSectionLabel(TT, "TARGETING", 5)
+CreateSlider(TT, "Health Threshold", 0, 100, Config.HealthThreshold, 1, function(v) Config.HealthThreshold = v end, 6)
+CreateSectionLabel(TT, "ANTI-CHEAT BYPASS", 7)
+CreateToggle(TT, "AC Bypass", Config.ACBypassEnabled, function(v) Config.ACBypassEnabled = v end, 8)
+CreateToggle(TT, "Humanize Aim", Config.HumanizeAim, function(v) Config.HumanizeAim = v end, 9)
+CreateToggle(TT, "Server Safe Mode", Config.ServerSafeMode, function(v) Config.ServerSafeMode = v end, 10)
+
+-- ==================== GUN MODS TAB ====================
+CreateSectionLabel(GMT, "FIRE", 1)
+CreateToggle(GMT, "Rapid Fire", Config.RapidFire, function(v) Config.RapidFire = v; if getgenv().RivalsWeaponMods then getgenv().RivalsWeaponMods.RapidFire = v end end, 2)
+CreateSlider(GMT, "Fire Cooldown", 0.001, 0.5, Config.RapidFireSpeed, 0.01, function(v) Config.RapidFireSpeed = v; if getgenv().RivalsWeaponMods then getgenv().RivalsWeaponMods.RapidFireSpeed = v end end, 3)
+CreateToggle(GMT, "Infinite Ammo", Config.InfiniteAmmo, function(v) Config.InfiniteAmmo = v; if getgenv().RivalsWeaponMods then getgenv().RivalsWeaponMods.InfiniteAmmo = v end end, 4)
+CreateToggle(GMT, "Instant Reload", Config.InstantReload, function(v) Config.InstantReload = v; if getgenv().RivalsWeaponMods then getgenv().RivalsWeaponMods.InstantReload = v end end, 5)
+CreateSectionLabel(GMT, "RECOIL & SPREAD", 6)
+CreateToggle(GMT, "No Recoil", Config.NoRecoil, function(v) Config.NoRecoil = v; if getgenv().RivalsWeaponMods then getgenv().RivalsWeaponMods.NoRecoil = v end end, 7)
+CreateSlider(GMT, "Recoil Reduction", 0, 100, Config.RecoilReduction, 1, function(v) Config.RecoilReduction = v; if getgenv().RivalsWeaponMods then getgenv().RivalsWeaponMods.RecoilReduction = v end end, 8)
+CreateToggle(GMT, "No Spread", Config.NoSpread, function(v) Config.NoSpread = v; if getgenv().RivalsWeaponMods then getgenv().RivalsWeaponMods.NoSpread = v end end, 9)
+CreateSectionLabel(GMT, "ADS & EQUIP", 10)
+CreateToggle(GMT, "Instant ADS", Config.InstantADS, function(v) Config.InstantADS = v; if getgenv().RivalsWeaponMods then getgenv().RivalsWeaponMods.InstantADS = v end end, 11)
+CreateToggle(GMT, "Instant Equip", Config.InstantEquip, function(v) Config.InstantEquip = v; if getgenv().RivalsWeaponMods then getgenv().RivalsWeaponMods.InstantEquip = v end end, 12)
+CreateToggle(GMT, "No Equip Animation", Config.NoEquipAnimation, function(v) Config.NoEquipAnimation = v; if getgenv().RivalsWeaponMods then getgenv().RivalsWeaponMods.NoEquipAnimation = v end end, 13)
+CreateSectionLabel(GMT, "VISUALS & MOVEMENT", 14)
+CreateToggle(GMT, "No Weapon Bob", Config.NoWeaponBob, function(v) Config.NoWeaponBob = v; if getgenv().RivalsWeaponMods then getgenv().RivalsWeaponMods.NoWeaponBob = v end end, 15)
+CreateSectionLabel(GMT, "PROJECTILE", 16)
+CreateToggle(GMT, "Instant Bullet Travel", Config.InstantBulletTravel, function(v) Config.InstantBulletTravel = v; if getgenv().RivalsWeaponMods then getgenv().RivalsWeaponMods.InstantBulletTravel = v end end, 17)
+CreateToggle(GMT, "Projectile Speed", Config.ProjectileSpeed, function(v) Config.ProjectileSpeed = v; if getgenv().RivalsWeaponMods then getgenv().RivalsWeaponMods.ProjectileSpeed = v end end, 18)
+CreateSlider(GMT, "Speed Multiplier", 1, 20, Config.ProjectileSpeedMultiplier, 1, function(v) Config.ProjectileSpeedMultiplier = v; if getgenv().RivalsWeaponMods then getgenv().RivalsWeaponMods.ProjectileSpeedMultiplier = v end end, 19)
+
+-- ==================== HvH TAB ====================
+CreateSectionLabel(HT, "ANTI AIM", 1)
+CreateToggle(HT, "Anti Aim", Config.AntiAimEnabled, function(v) Config.AntiAimEnabled = v; if not v then pcall(function() local c = LocalPlayer.Character; if c then local fr = c:FindFirstChild("WHL_FakeRoot"); if fr then fr:Destroy() end end end) end end, 2)
+CreateDropdown(HT, "AA Mode", {"Spin", "Jitter", "Sideways", "Backwards", "Random", "Switch", "Custom"}, Config.AntiAimMode, function(v) Config.AntiAimMode = v end, 3)
+CreateDropdown(HT, "Pitch", {"Down", "Up", "Zero", "Jitter", "Random"}, Config.AntiAimPitch, function(v) Config.AntiAimPitch = v end, 4)
+CreateSlider(HT, "Spin Speed", 1, 50, Config.SpinSpeed, 1, function(v) Config.SpinSpeed = v end, 5)
+CreateSlider(HT, "Jitter Range", 10, 180, Config.JitterRange, 5, function(v) Config.JitterRange = v end, 6)
+CreateSlider(HT, "Custom Angle", 0, 360, Config.FakeAngleOffset, 5, function(v) Config.FakeAngleOffset = v end, 7)
+CreateSectionLabel(HT, "DESYNC", 8)
+CreateToggle(HT, "Desync", Config.DesyncEnabled, function(v) Config.DesyncEnabled = v; if not v then pcall(function() local c = LocalPlayer.Character; if c then local fr = c:FindFirstChild("WHL_FakeRoot"); if fr then fr:Destroy() end end end) end end, 9)
+CreateDropdown(HT, "Desync Mode", {"Opposite", "Left", "Right", "Jitter", "Random"}, Config.DesyncMode, function(v) Config.DesyncMode = v end, 10)
+CreateSectionLabel(HT, "FAKE LAG", 11)
+CreateToggle(HT, "Fake Lag", Config.FakeLagEnabled, function(v) Config.FakeLagEnabled = v; FakeLagCounter = 0 end, 12)
+CreateSlider(HT, "Lag Amount", 1, 15, Config.FakeLagAmount, 1, function(v) Config.FakeLagAmount = v end, 13)
+CreateSectionLabel(HT, "DEFENSIVE", 14)
+CreateToggle(HT, "Anti Backtrack", Config.AntiBacktrack, function(v) Config.AntiBacktrack = v end, 15)
+CreateSectionLabel(HT, "ANTI RESOLVE", 16)
+CreateToggle(HT, "Anti Resolver", Config.AntiResolver, function(v) Config.AntiResolver = v end, 17)
+CreateDropdown(HT, "Resolver Mode", {"Jitter", "Spin Fake", "Flip", "Random"}, Config.AntiResolverMode, function(v) Config.AntiResolverMode = v end, 18)
+
+-- ==================== VISUALS TAB ====================
+CreateSectionLabel(VT, "ESP", 1)
+CreateToggle(VT, "ESP Enabled", Config.ESPEnabled, function(v) Config.ESPEnabled = v end, 2)
+CreateToggle(VT, "Boxes", Config.ESPBoxes, function(v) Config.ESPBoxes = v end, 3)
+CreateToggle(VT, "Health Bar", Config.ESPHealth, function(v) Config.ESPHealth = v end, 4)
+CreateToggle(VT, "Distance", Config.ESPDistance, function(v) Config.ESPDistance = v end, 5)
+CreateToggle(VT, "Gun Name", Config.ESPGuns, function(v) Config.ESPGuns = v end, 6)
+CreateToggle(VT, "Player Names", Config.ESPNames, function(v) Config.ESPNames = v end, 7)
+CreateToggle(VT, "ESP Team Check", Config.ESPTeamCheck, function(v) Config.ESPTeamCheck = v end, 8)
+CreateSlider(VT, "Max Distance", 100, 5000, Config.ESPMaxDistance, 50, function(v) Config.ESPMaxDistance = v end, 9)
+CreateSlider(VT, "Text Size", 8, 20, Config.ESPTextSize, 1, function(v) Config.ESPTextSize = v end, 10)
+CreateSectionLabel(VT, "SKIN CHANGER", 11)
+CreateToggle(VT, "Unlock All Skins", Config.UnlockAllSkins, function(v) Config.UnlockAllSkins = v; if v and not SkinChangerHooked then pcall(HookSkinChanger) end end, 12)
+
+-- ==================== MISC TAB ====================
+CreateSectionLabel(MT, "KEYBINDS", 1)
+CreateKeyPicker(MT, "Aim Key", Config.AimKey, function(v) Config.AimKey = v end, 2)
+CreateKeyPicker(MT, "Aimbot Toggle Key", Config.AimbotToggleKey, function(v) Config.AimbotToggleKey = v end, 3)
+CreateKeyPicker(MT, "Menu Key", Config.ToggleKey, function(v) Config.ToggleKey = v end, 4)
+CreateSectionLabel(MT, "FLY", 5)
+CreateToggle(MT, "Fly Enabled", Config.FlyEnabled, function(v) Config.FlyEnabled = v; if v then pcall(StartFly) else pcall(StopFly) end end, 6)
+CreateSlider(MT, "Fly Speed", 1, 100000, Config.FlySpeed, 1, function(v) Config.FlySpeed = v end, 7)
+CreateKeyPicker(MT, "Fly Toggle Key", Config.FlyKey, function(v) Config.FlyKey = v end, 8)
+CreateSectionLabel(MT, "DISCORD", 9)
+CreateInfoLabel(MT, "Join our Discord for updates, new features, and more scripts!\nhttps://discord.gg/S2VUQwqxzP", Color3.fromRGB(120, 140, 255), 10)
+CreateButton(MT, "Copy Discord Invite", Color3.fromRGB(30, 30, 50), Color3.fromRGB(120, 140, 255), function() if setclipboard then setclipboard("https://discord.gg/S2VUQwqxzP") elseif toclipboard then toclipboard("https://discord.gg/S2VUQwqxzP") end end, 11)
+CreateSectionLabel(MT, "ACTIONS", 12)
+CreateButton(MT, "Save Config", Color3.fromRGB(25, 35, 25), Color3.fromRGB(100, 200, 100), function() SaveConfig(Config) end, 13)
+CreateButton(MT, "Load Config", Color3.fromRGB(25, 25, 35), Color3.fromRGB(100, 100, 200), function() Config = LoadConfig(DefaultConfig) end, 14)
+CreateButton(MT, "Reset Config", Color3.fromRGB(35, 30, 20), Color3.fromRGB(200, 180, 80), function() Config = DeepCopy(DefaultConfig); SaveConfig(Config) end, 15)
+CreateButton(MT, "Unload", Color3.fromRGB(30, 20, 20), Color3.fromRGB(180, 80, 80), function() Unload() end, 16)
+
+MainFrame.Visible = MenuOpen
+
+-- ==================== GUI IS NOW VISIBLE ====================
+-- Everything below runs in protected spawns so crashes don't kill the UI
+
+-- ==================== FOV CIRCLE ====================
+
+local FOVCircle = Drawing.new("Circle")
+FOVCircle.Color = Color3.fromRGB(255, 255, 255)
+FOVCircle.Thickness = 1
+FOVCircle.NumSides = 80
+FOVCircle.Radius = Config.FOVRadius
+FOVCircle.Filled = false
+FOVCircle.Visible = Config.FOVVisible
+FOVCircle.Transparency = 0.7
+getgenv().WeHateLarpsFOV = FOVCircle
+
+-- ==================== HUMANIZED AIM ====================
+
+local function HumanizedMouseMove(deltaX, deltaY, smoothness, sensitivity)
+    local jitterX = (math.random() - 0.5) * HumanAim.MicroJitter
+    local jitterY = (math.random() - 0.5) * HumanAim.MicroJitter
+    local distance = math.sqrt(deltaX * deltaX + deltaY * deltaY)
+    local speedFactor = 1
+    if HumanAim.AccelerationCurve and distance > 0 then
+        local normalizedDist = math.clamp(distance / 500, 0, 1)
+        speedFactor = 1 - (1 - normalizedDist) * (1 - normalizedDist) * 0.3
+    end
+    local overshootX, overshootY = 0, 0
+    if math.random() < HumanAim.Overshoot then
+        overshootX = deltaX * (math.random() * 0.15 + 0.02)
+        overshootY = deltaY * (math.random() * 0.15 + 0.02)
+    end
+    local finalX = ((deltaX + overshootX) / math.max(smoothness, 0.1)) * sensitivity * speedFactor + jitterX
+    local finalY = ((deltaY + overshootY) / math.max(smoothness, 0.1)) * sensitivity * speedFactor + jitterY
+    finalX = math.clamp(finalX, -150, 150)
+    finalY = math.clamp(finalY, -150, 150)
+    mousemoverel(finalX, finalY)
+end
+
+-- ==================== AIMBOT FUNCTIONS ====================
+
+local function IsAlive(player)
+    if not player then return false end
+    local char = player.Character
+    if not char then return false end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not hum then return false end
+    return hum.Health > Config.HealthThreshold
+end
+
+local function IsVisible(part)
+    if not part then return false end
+    local origin = Camera.CFrame.Position
+    local direction = (part.Position - origin)
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    params.FilterDescendantsInstances = {LocalPlayer.Character, Camera}
+    local result = workspace:Raycast(origin, direction, params)
+    if not result then return true end
+    return result.Instance:IsDescendantOf(part.Parent)
+end
+
+local function GetTargetPart(character)
+    local part = character:FindFirstChild(Config.TargetPart)
+    if part then return part end
+    return character:FindFirstChild("Head") or character:FindFirstChild("HumanoidRootPart")
+end
+
+local function GetClosestPlayer()
+    local closest, closestDist = nil, Config.FOVRadius
+    local screenCenter = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr == LocalPlayer then continue end
+        if Config.TeamCheck and plr.Team and LocalPlayer.Team and plr.Team == LocalPlayer.Team then continue end
+        if Config.AliveCheck and not IsAlive(plr) then continue end
+        local char = plr.Character; if not char then continue end
+        local part = GetTargetPart(char); if not part then continue end
+        if Config.WallCheck and not IsVisible(part) then continue end
+        local screenPos, onScreen = Camera:WorldToViewportPoint(part.Position)
+        if not onScreen then continue end
+        local dist = (Vector2.new(screenPos.X, screenPos.Y) - screenCenter).Magnitude
+        if dist < closestDist then closestDist = dist; closest = plr end
+    end
+    return closest
+end
+
+local function GetClosestPlayerSuperSticky()
+    local closest, closestDist = nil, Config.FOVRadius * Config.SuperStickyFOVMultiplier
+    local screenCenter = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr == LocalPlayer then continue end
+        if Config.TeamCheck and plr.Team and LocalPlayer.Team and plr.Team == LocalPlayer.Team then continue end
+        if Config.AliveCheck and not IsAlive(plr) then continue end
+        local char = plr.Character; if not char then continue end
+        local part = GetTargetPart(char); if not part then continue end
+        if Config.WallCheck and not IsVisible(part) then continue end
+        local screenPos, onScreen = Camera:WorldToViewportPoint(part.Position)
+        if not onScreen then continue end
+        local dist = (Vector2.new(screenPos.X, screenPos.Y) - screenCenter).Magnitude
+        if dist < closestDist then closestDist = dist; closest = plr end
+    end
+    return closest
+end
+
+local function GetClosestPlayerForTriggerbot()
+    local closest, closestDist = nil, Config.FOVRadius
+    local screenCenter = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr == LocalPlayer then continue end
+        if Config.TeamCheck and plr.Team and LocalPlayer.Team and plr.Team == LocalPlayer.Team then continue end
+        if Config.AliveCheck and not IsAlive(plr) then continue end
+        local char = plr.Character; if not char then continue end
+        local part = GetTargetPart(char); if not part then continue end
+        if Config.TriggerBotWallCheck and not IsVisible(part) then continue end
+        local screenPos, onScreen = Camera:WorldToViewportPoint(part.Position)
+        if not onScreen then continue end
+        local dist = (Vector2.new(screenPos.X, screenPos.Y) - screenCenter).Magnitude
+        if dist < closestDist then closestDist = dist; closest = plr end
+    end
+    return closest
+end
+
+local function InputMatchesAimKey(input)
+    local aimKey = Config.AimKey
+    if typeof(aimKey) == "EnumItem" then
+        if aimKey.EnumType == Enum.UserInputType then return input.UserInputType == aimKey
+        elseif aimKey.EnumType == Enum.KeyCode then return input.KeyCode == aimKey end
+    end
+    return false
+end
+
+-- ==================== ESP ====================
+
+local function GetPlayerGun(player)
+    if not player or not player.Character then return "None... (48 KB left)
